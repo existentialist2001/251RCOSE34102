@@ -6,6 +6,7 @@
 #define MAX_PROCESSES 5
 #define MAX_IO_EVENTS 3
 #define MAX_TIME 200
+#define TIME_QUANTUM 2
 
 // 프로세스를 의미하는 구조체
 typedef struct
@@ -523,7 +524,6 @@ void Priority_Nonpreemptive_IO()
 
     while (completed < process_count)
     {
-        gantt_chart[gantt_index++] = running_pid;
 
         // 도착한 프로세스를 Ready Queue에 넣기
         for (int i = 0; i < process_count; i++)
@@ -599,6 +599,105 @@ void Priority_Nonpreemptive_IO()
                 }
             }
         }
+        gantt_chart[gantt_index++] = running_pid;
+        current_time++;
+    }
+}
+// Round Robin 전용 Ready Queue 추가 함수(Round Robin에서는 중복검사를 하면 안됨, ready queue에 여러개 같은 프로세스가 들어갈 수 있음)
+void Add_To_Ready_RR(Process p)
+{
+    Process *orig = &plist[p.pid - 1];
+
+    // 끝났으면 넣을 필요가X
+    if (orig->remaining_time <= 0 || orig->is_completed)
+        return;
+
+    snprintf(orig->state, 16, "READY");
+    ready_queue[ready_count++] = *orig;
+}
+
+void RoundRobin_IO()
+{
+    printf("\n[RoundRobin_IO]\n");
+    int current_time = 0;
+    int completed = 0;
+    int running_pid = -1;
+    int time_slice = 0;
+
+    while (completed < process_count)
+    {
+        // printf("time: %d | running_pid: %d | time_slice: %d | ready_count: %d\n", current_time, running_pid, time_slice, ready_count);
+        gantt_chart[gantt_index++] = running_pid;
+
+        // 프로세스 도착 시점에 Ready Queue 추가
+        for (int i = 0; i < process_count; i++)
+        {
+            if (plist[i].arrival_time == current_time)
+            {
+                Add_To_Ready(plist[i]);
+            }
+        }
+
+        Process_Waiting_Queue();
+
+        // 실행 중인 프로세스가 없으면 Ready Queue에서 꺼내기
+        if (running_pid == -1 && ready_count > 0)
+        {
+            running_pid = Pop_Ready();
+            time_slice = 0;
+        }
+
+        // 실행 중인 프로세스가 있을 때만 처리
+        if (running_pid != -1)
+        {
+            Process *p = &plist[running_pid - 1];
+
+            if (p->start_time == -1)
+                p->start_time = current_time;
+
+            // I/O 요청 도달
+            if (p->current_io_index < p->io_event_count &&
+                p->remaining_time == p->cpu_burst_time - p->io_request_times[p->current_io_index])
+            {
+                snprintf(p->state, 16, "WAITING");
+                p->io_remaining = p->io_burst_times[p->current_io_index];
+                p->current_io_index++;
+                waiting_queue[waiting_count++] = *p;
+                running_pid = -1;
+                time_slice = 0;
+            }
+            else
+            {
+                p->remaining_time--;
+                time_slice++;
+
+                // 프로세스 종료
+                if (p->remaining_time == 0)
+                {
+                    p->end_time = current_time + 1;
+                    p->turnaround_time = p->end_time - p->arrival_time;
+                    p->waiting_time = p->turnaround_time - p->cpu_burst_time;
+                    snprintf(p->state, 16, "TERMINATED");
+                    p->is_completed = 1;
+                    running_pid = -1;
+                    time_slice = 0;
+                    completed++;
+                }
+                // time quantum 소진(선점)
+                /*
+                처음에, 조건문을 time_slice == TIME_QUANTUM로 설정했는데, time quantum보다 1개 적게 실행되었다.
+                이유를 도통 모르겠어서 고민하다, + 1을 해주니 정상작동되었다.
+                이게 논리상, 기존 코드는 1회 실행, 2회 실행(선점 발생, 2회 실행 마무리X) 이기 때문
+                */
+                else if (time_slice == TIME_QUANTUM + 1)
+                {
+                    Add_To_Ready_RR(*p);
+                    running_pid = -1;
+                    time_slice = 0;
+                }
+                // 아무 일도 없으면 running_pid 그대로 유지!
+            }
+        }
 
         current_time++;
     }
@@ -612,6 +711,7 @@ int main()
     // SJF_Nonpreemptive_IO();
     // SJF_Preemptive_IO();
     Priority_Nonpreemptive_IO();
+    // RoundRobin_IO();
     Print_Gantt_Chart();
     Print_Results();
     return 0;
