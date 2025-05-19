@@ -1,24 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <string.h>
 
 #define MAX_PROCESSES 5
 #define MAX_IO_EVENTS 3
 #define MAX_TIME 200
-
-/*
-시점 하나씩 밀리는 것 - io요청 없을 때 간트차트 반영하고 continue, io 요청있을 때 간트차트에 넣지말고 contine로 해결
-cpu burst time이 짧아도, io 요청이 오면 중간에 나가서 다른 프로세스에게 cpu를 선점당하는 것 확인,
-매 시점마다 ready queue에서 짧은 cpu burst time을 선택해서 선점하는 것도 확인
-
-여기서 io_burst_time까지 맞춰주기 완료
-
-기본전에, ready_queue에서 cpu burst time이 같으면, 먼저 들어온 게 계속 선택된다.
-이건 preemptive priority랑 구조가 같음,
-균등하게 배분하거나 fcfs로도 해보고 싶은데, 아직 거기까지는 능력이 안됨
-지금까지 하는 것도 힘들었음
-*/
 
 typedef struct
 {
@@ -26,6 +12,7 @@ typedef struct
     int arrival_time;
     int burst_time;
     int remaining_time;
+    int priority;
     int start_time, end_time;
     int waiting_time, turnaround_time;
     int is_completed;
@@ -34,21 +21,17 @@ typedef struct
     int io_event_count;
     int io_request_times[MAX_IO_EVENTS];
     int io_burst_times[MAX_IO_EVENTS];
-    int current_io_index; // 몇번째 io 이벤트 대기중인지
-    int io_remaining;     // I/O 남은 시간
-
-    int is_waiting; // 1: I/O 대기중, 0: CPU ready/실행
+    int current_io_index;
+    int io_remaining;
+    int is_waiting;
 } Process;
 
 Process plist[MAX_PROCESSES];
 Process *ready_queue[MAX_PROCESSES * 2];
 int ready_count = 0;
-
 Process *waiting_queue[MAX_PROCESSES * 2];
 int waiting_count = 0;
-
 int process_count = MAX_PROCESSES;
-
 int gantt_chart[MAX_TIME], gantt_index = 0;
 
 void Create_Process()
@@ -60,49 +43,44 @@ void Create_Process()
         p->pid = i + 1;
         p->arrival_time = rand() % 5;
         p->burst_time = 8 + rand() % 8;
+        p->priority = 1 + rand() % 5; // 1~5 우선순위(클수록 높음)
         p->remaining_time = p->burst_time;
         p->start_time = -1;
         p->end_time = -1;
         p->waiting_time = 0;
         p->turnaround_time = 0;
         p->is_completed = 0;
-
         p->current_io_index = 0;
         p->io_remaining = 0;
         p->is_waiting = 0;
 
-        // 랜덤 I/O
         p->io_event_count = 1 + rand() % MAX_IO_EVENTS;
-
         for (int j = 0; j < p->io_event_count; j++)
         {
             p->io_request_times[j] = (j + 1) * (p->burst_time / (p->io_event_count + 1));
             p->io_burst_times[j] = 1 + rand() % 4;
         }
 
-        // 디버깅 출력
-        printf("P%d | AT:%d | CPU:%d | IO:", p->pid, p->arrival_time, p->burst_time);
+        printf("P%d | AT:%d | CPU:%d | PRI:%d | IO:", p->pid, p->arrival_time, p->burst_time, p->priority);
         for (int j = 0; j < p->io_event_count; j++)
             printf(" %d@%d", p->io_burst_times[j], p->io_request_times[j]);
         printf("\n");
     }
 }
 
-// ready queue에 중복 없이 삽입
 void Add_To_Ready(Process *p)
 {
-    // p -> is_waiting이 1이라는 것은, io 대기중이므로 ready queue에 들어가면X
+
     if (p->remaining_time <= 0 || p->is_completed || p->is_waiting)
         return;
 
-    // 중복검사, sjf에서는 ready queue에 똑같은 프로세스가 여러개 있으면X
     for (int i = 0; i < ready_count; i++)
         if (ready_queue[i] == p)
             return;
+
     ready_queue[ready_count++] = p;
 }
 
-// waiting queue에 삽입 (중복X)
 void Add_To_Waiting(Process *p)
 {
     for (int i = 0; i < waiting_count; i++)
@@ -118,55 +96,79 @@ void Process_Waiting_Queue()
         Process *p = waiting_queue[i];
         p->io_remaining--;
 
+        /*
+        여기서 문제가, 다음 시점에 넣어줘야 하는데(한 시점 썼으니까) 바로 ready_queue에 넣어주고, 바로 검사하게 되어서
+        시점의 왜곡이 발생하는 것
+        */
         if (p->io_remaining <= 0)
         {
+            // 사실 무의미한게, 이미 있기 때문에 중복 검사에서 걸려서 어짜피 안넣어짐, p->is_waiting = 0이 실질적으로 효과가 있는 거임
             p->is_waiting = 0;
+
+            // 무의미하니까 주석처리(일단 놔둠)
             Add_To_Ready(p);
 
-            // IO끝나고 ready queue에 넣었으니 waiting queue 한칸씩 앞으로 당기기
             for (int j = i; j < waiting_count - 1; j++)
-
                 waiting_queue[j] = waiting_queue[j + 1];
             waiting_count--;
             i--;
         }
     }
 }
+/*
+ready queue의 작동방식
+여기서 ready queue는 실제로 어떤 데이터를 삭제하지 않는다.
+그래서, p1이 p2와 priority가 같은데, p1이 먼저 ready_queue에 추가되었으면, 계속해서 p1이 선택되도록 구현되어있음
+사실 균등하게 배분하고 싶은데, 너무 까다로워서 거기까진 손을 못대겠다.
 
-void SRTF_IO_Ptr()
+그리고 cpu burst time, 순서, 선점 다 이루어지는데
+io_burst_time이 엄밀하게 지켜지지 않고 있음
+이거 계속 디버깅해보는데 못찾는 중..
+-> '시점이 반영될 때에만' 동시에 io처리를 하도록 코드를 구현하면, io_burst_time이 엄밀하게 지켜짐
+*/
+void Preemptive_Priority_IO()
 {
+    printf("\nPreemptive_Priority_IO\n");
     int current_time = 0, completed = 0;
     Process *running = NULL;
 
-    printf("\nSRTF_IO_Ptr\n");
-
     while (completed < process_count)
     {
-
         // 도착 프로세스 ready로 이동
         for (int i = 0; i < process_count; i++)
-
             if (plist[i].arrival_time == current_time)
                 Add_To_Ready(&plist[i]);
 
-        // ready queue에서 SRTF 찾기
-        int min_time = 1e9, min_idx = -1;
-
+        // ready 중에서 우선순위(숫자 클수록 높음) 가장 높은 것 고르기
+        int max_priority = -1, sel_idx = -1;
         for (int i = 0; i < ready_count; i++)
         {
-            // ready queue의 프로세스가 완료되지 않았고, io를 기다리고 있지도 않으면- 후보로서 srtf를 찾기 위한 검사를 해줌
+
             if (!ready_queue[i]->is_completed && !ready_queue[i]->is_waiting && ready_queue[i]->remaining_time > 0)
             {
-                if (ready_queue[i]->remaining_time < min_time)
+                if (ready_queue[i]->priority > max_priority)
                 {
-                    min_time = ready_queue[i]->remaining_time;
-                    min_idx = i;
+                    max_priority = ready_queue[i]->priority;
+                    sel_idx = i;
                 }
             }
         }
+        running = (sel_idx != -1) ? ready_queue[sel_idx] : NULL;
 
-        // 그렇게 선택된 프로세스를 넣어줌(가장 짧은 프로세스, 실행하기로 결정된 프로세스!)
-        running = (min_idx != -1) ? ready_queue[min_idx] : NULL;
+        // reday_queue에서 해당 프로세스를 삭제해주는 작업(이거하면 큰일남)
+        //  if (sel_idx != -1)
+        //  {
+        //      for (int j = sel_idx; j < ready_count - 1; j++)
+        //          ready_queue[j] = ready_queue[j + 1];
+        //      ready_count--;
+        //  }
+
+        // waiting queue 처리
+        // io를 병렬적으로 한시점씩 싹 처리
+        /*
+        프로세스 실행 중 io가 발생하면, 바로 continue를 해서 current_time++을 하지 않는다.
+        즉 '그 시점'은 반영하지 않는다. 그렇기 때문에 다음 루프에서 io처리를 할 때는, ready_queue 판단이 끝난 후 해야한다.
+        */
 
         // 실행
         if (running)
@@ -174,33 +176,26 @@ void SRTF_IO_Ptr()
             if (running->start_time == -1)
                 running->start_time = current_time;
 
-            // I/O 요청이 발생하면-
+            // I/O 요청 도달
             if (running->current_io_index < running->io_event_count &&
                 running->remaining_time == running->burst_time - running->io_request_times[running->current_io_index])
             {
                 running->io_remaining = running->io_burst_times[running->current_io_index];
-
                 running->is_waiting = 1;
                 Add_To_Waiting(running);
-                /*여기서, ready queue에서 제거하지 않아도 됨, 왜냐하면 is_waiting = 1이기 때문에, ready_queue에 남아있더라도 가장 짧은 프로세스를 찾을 때
-                고려안됨*/
                 running->current_io_index++;
 
-                /*
-                이걸 안해주면, 프로세스가 io 요청을 하러 갔는데도 불구하고, 뒷 부분에서 실행중으로 간트차트에 반영되게 해버려서
-                1시점씩 뒤로 밀리게 됨
-                io발생 떄도 간트차트를 건너뛰어야함
-                */
+                // 시점 반영안해버림
                 continue;
             }
-            // io 요청이 없으면 곧장 실행
+            // io요청이 없으면(시점반영되는 경우)
             else
             {
                 running->remaining_time--;
 
-                if (running && running->remaining_time == 0)
+                // 프로세스가 완전히 끝나면-
+                if (running->remaining_time == 0)
                 {
-                    // 매 시점마다 waiting queue 처리
                     Process_Waiting_Queue();
                     running->end_time = current_time + 1;
                     running->turnaround_time = running->end_time - running->arrival_time;
@@ -217,18 +212,10 @@ void SRTF_IO_Ptr()
             }
         }
 
-        // 간트 차트에 넣기
-        if (running)
-        {
-            gantt_chart[gantt_index++] = running->pid;
-        }
-        else
-        {
-            gantt_chart[gantt_index++] = 0; // idle
-        }
-        // 매 시점마다 waiting queue 처리
+        // 간트차트 기록, 이 경우는 io요청도 없었고, 실행했지만 프로세스가 완전히 끝나지 않은 경우(시점 반영 되는 경우)
         Process_Waiting_Queue();
         current_time++;
+        gantt_chart[gantt_index++] = (running ? running->pid : 0);
 
         if (current_time > MAX_TIME - 2)
             break;
@@ -242,7 +229,6 @@ void Print_Gantt_Chart()
     printf("[0~P%d ", last);
     for (int i = 1; i < gantt_index; i++)
     {
-        // 다른 거면, 다르게 출력
         if (gantt_chart[i] != last)
         {
             printf("] [%d~P%d ", i, gantt_chart[i]);
@@ -269,7 +255,7 @@ void Print_Results()
 int main()
 {
     Create_Process();
-    SRTF_IO_Ptr();
+    Preemptive_Priority_IO();
     Print_Gantt_Chart();
     Print_Results();
     return 0;
