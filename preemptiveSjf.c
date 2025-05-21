@@ -16,8 +16,7 @@ cpu burst time이 짧아도, io 요청이 오면 중간에 나가서 다른 프�
 
 기본전에, ready_queue에서 cpu burst time이 같으면, 먼저 들어온 게 계속 선택된다.
 이건 preemptive priority랑 구조가 같음,
-균등하게 배분하거나 fcfs로도 해보고 싶은데, 아직 거기까지는 능력이 안됨
-지금까지 하는 것도 힘들었음
+사실상 fcfs인 것, 이건 정책의 문제라 이대로 가도 될
 */
 
 typedef struct
@@ -138,7 +137,7 @@ void SRTF_IO_Ptr()
     int current_time = 0, completed = 0;
     Process *running = NULL;
 
-    printf("\nSRTF_IO_Ptr\n");
+    printf("\nPreemptiveSjf_IO_Ptr\n");
 
     while (completed < process_count)
     {
