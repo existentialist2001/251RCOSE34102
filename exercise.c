@@ -195,9 +195,10 @@ void Process_Waiting_Queue()
 간트 차트 1씩 밀리는 문제 해결 완료, burst time도 기존에 부여된 값과 동일
 기본적으로 선입선출대로 실행되지만, io요청에 따라 선점되서 나가는 것까지 확인
 */
-void FCFS_IO_With_MultipleIO()
+void FCFS()
 {
-    printf("\nFCFS_IO_With_MultipleIO\n");
+    printf("\nFCFS\n");
+
     int current_time = 0;
     int completed = 0;
     int running_pid = -1;

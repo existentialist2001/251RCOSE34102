@@ -5,6 +5,7 @@
 #define MAX_PROCESSES 5
 #define MAX_IO_EVENTS 3
 #define MAX_TIME 200
+#define TIME_QUANTUM 2
 
 typedef struct
 {
@@ -128,6 +129,109 @@ void Process_Waiting_Queue()
         }
     }
 }
+
+/*
+다른 알고리즘들과 달리 특별한 처리를 해줄 필요가 없는 것이, 프로세스 도착 시점에 ready queue에 추가하는 것만으로도
+이미 fcfs가 이루어지고 있다고 볼 수 있다.
+*/
+void FCFS()
+{
+    printf("\nFCFS\n");
+
+    int current_time = 0;
+    int completed = 0;
+    Process *running = NULL;
+
+    while (completed < process_count)
+    {
+        // 프로세스 도착 시점에 Ready Queue 추가
+        for (int i = 0; i < process_count; i++)
+        {
+            if (plist[i].arrival_time == current_time)
+            {
+                Add_To_Ready(&plist[i]);
+            }
+        }
+
+        // 아무도 cpu를 쓰고 있지 않는 경우, cpu할당을 위한 준비
+        /*
+        처음에 idle이라면 어쩔건데? -1을 리턴하고, 그럼 null을 참조하게 됨
+        */
+        if (!running)
+        {
+            if (ready_count > 0)
+            {
+                int pid = ready_queue[0]->pid;
+                for (int i = 0; i < ready_count - 1; i++)
+                {
+                    ready_queue[i] = ready_queue[i + 1];
+                }
+                ready_count--;
+                running = &plist[pid - 1];
+            }
+        }
+
+        // cpu를 할당
+        if (running)
+        {
+
+            if (running->start_time == -1)
+            {
+                running->start_time = current_time;
+            }
+
+            // cpu를 쓰는 중인데 io 작업이 있는 경우
+            // 현재 프로세스가 몇번째 io인지, 그게 그 프로세스의 전체 io 횟수보다 낮으면서, 해당 io 시간이 되었으면 io 처리 실행
+            if (running->current_io_index < running->io_event_count &&
+                running->remaining_time == running->burst_time - running->io_request_times[running->current_io_index])
+            {
+                running->io_remaining = running->io_burst_times[running->current_io_index];
+                // waiting queue에 집어 넣을꺼니까 한개 증가
+                running->current_io_index++;
+                // waiting queue에 넣어서 io 처리를 하는 행위
+                Add_To_Waiting(running);
+                // cpu를 안쓰므로 null
+                running = NULL;
+                continue;
+            }
+
+            // cpu를 쓰는 중인데 io 작업이 없는 경우
+            else
+            {
+                running->remaining_time--;
+                if (running->remaining_time == 0)
+                {
+                    Process_Waiting_Queue();
+                    running->end_time = current_time + 1;
+                    running->turnaround_time = running->end_time - running->arrival_time;
+
+                    // 이렇게도 계산할  수 있음, turnaround = 대기 + 실행, 대기 = turnaround - 실행
+                    running->waiting_time = running->turnaround_time - running->burst_time;
+
+                    running->is_completed = 1;
+                    gantt_chart[gantt_index++] = running->pid;
+
+                    running = NULL;
+                    completed++;
+                    current_time++;
+                    continue;
+
+                    /*
+                    프로세스가 끝난 경우, 그 시점까지는 running_pid가 프로세스 id로 간트차트에 기록되어야 함
+                    그런데 기존 코드는 프로세스가 끝나면 running_pid를 -1로 바꾸어 버리고, 그 상태에서 간트차트에 반영해버리기 때문에
+                    1개씩 시점이 앞으로 밀리고, cpu burst time도 한개씩 부족했던 것
+                    */
+                }
+            }
+        }
+
+        // 현재 실행 중인 프로세스 기록 후, ++ 시켜서 다음 시점으로
+        gantt_chart[gantt_index++] = (running ? running->pid : 0);
+        Process_Waiting_Queue();
+        current_time++;
+    }
+}
+
 /*
 io요청 때문에 스스로 나가는 경우를 제외하고는, cpu가 선점되는 경우 없음
 cpu burst time, io burst time 모두 일치하는 것 확인
@@ -440,6 +544,120 @@ void SRTF_IO_Ptr()
     }
 }
 
+/*
+도착 순서대로 time quantum만큼 실행되는 것 확인
+time quantum도 다썼는데, 그 시점에 io도 발생하는 경우)
+사실 자원을 반납하고, io 처리도 해주면 됨, 그래서 io 조건에 먼저 걸리게 해주었음
+
+time quantum을 다써서 ready queue로 돌아가려는데, 그 시점에 새 프로세스가 진입하는 경우)
+골고루 실행될 수 있도록 하기위해, 새 프로세스가 ready queue에 먼저 들어가도록 해주었음
+
+preemptive 가 붙은 알고리즘들과 다르게, 실제로 ready queue에서 추가하고 삭제해주는 방식
+
+1만큼 실행(time quantum만큼 다 실행x) 했을 때 io가 발생하는 경우)
+time slice 초기화되도록 함
+
+time qauntum을 다쓰고, 프로세스도 종료되는 경우)
+서로 구분해야함, 안그러면 둘다 반영되어 io 두번 처리되는 등의 불상사
+*/
+void RoundRobin_IO()
+{
+    printf("\n[RoundRobin]\n");
+    int current_time = 0;
+    int completed = 0;
+    int time_slice = 0;
+
+    Process *running = NULL;
+
+    while (completed < process_count)
+    {
+
+        // 프로세스 도착 시점에 Ready Queue 추가
+        for (int i = 0; i < process_count; i++)
+        {
+            if (plist[i].arrival_time == current_time)
+            {
+                Add_To_Ready(&plist[i]);
+            }
+        }
+
+        // 실행 중인 프로세스가 없으면 Ready Queue에서 꺼내기
+        if (!running && ready_count > 0)
+        {
+            int pid = ready_queue[0]->pid;
+            for (int i = 0; i < ready_count - 1; i++)
+            {
+                ready_queue[i] = ready_queue[i + 1];
+            }
+            ready_count--;
+            running = &plist[pid - 1];
+            time_slice = 0;
+        }
+
+        // 실행 중인 프로세스가 있으면
+        if (running)
+        {
+            if (running->start_time == -1)
+                running->start_time = current_time;
+
+            // I/O 요청 도달
+            if (running->current_io_index < running->io_event_count &&
+                running->remaining_time == running->burst_time - running->io_request_times[running->current_io_index])
+            {
+                running->io_remaining = running->io_burst_times[running->current_io_index];
+                running->current_io_index++;
+                waiting_queue[waiting_count++] = running;
+
+                running = NULL;
+                time_slice = 0;
+
+                continue;
+            }
+
+            if (time_slice == TIME_QUANTUM)
+            {
+                Add_To_Ready(running);
+                running = NULL;
+                time_slice = 0;
+                continue;
+            }
+
+            // io요청이 없으면 계속 실행, 계속 실행하는데-
+            else
+            {
+                running->remaining_time--;
+                time_slice++;
+
+                // 프로세스가 완전히 끝났다면
+                if (running->remaining_time == 0)
+                {
+                    Process_Waiting_Queue();
+                    running->end_time = current_time + 1;
+                    running->turnaround_time = running->end_time - running->arrival_time;
+                    running->waiting_time = running->turnaround_time - running->burst_time;
+                    running->is_completed = 1;
+
+                    /*이거, 프로세스가 완전히 끝났든, 타임 퀀텀이 됐든 '진행'이 되었기 때문에,  간트차트에 반영해주고 current_time++해야함 */
+                    //
+                    gantt_chart[gantt_index++] = running->pid;
+
+                    running = NULL;
+                    time_slice = 0;
+
+                    completed++;
+                    current_time++;
+                    continue;
+                }
+            }
+        }
+
+        // 결국 여기는 io도 없고, 프로세스가 완전히 끝나지도 않고, timequantum도 남았을 때 오는 부분
+        Process_Waiting_Queue();
+        gantt_chart[gantt_index++] = (running ? running->pid : 0);
+        current_time++;
+    }
+}
+
 void Print_Gantt_Chart()
 {
     printf("\n[Gantt Chart]\n");
@@ -482,6 +700,18 @@ int main()
     Create_Process();
     memcpy(backup, plist, sizeof(plist)); // plist 백업
 
+    // FCFS 실행
+    FCFS();
+    Print_Gantt_Chart();
+    Print_Results();
+
+    // 다시 초기화(복원)
+    memcpy(plist, backup, sizeof(plist));
+    ready_count = waiting_count = gantt_index = 0;
+    memset(ready_queue, 0, sizeof(ready_queue));
+    memset(waiting_queue, 0, sizeof(waiting_queue));
+    memset(gantt_chart, 0, sizeof(gantt_chart));
+
     // Preemptive Priority 실행
     Preemptive_Priority_IO();
     Print_Gantt_Chart();
@@ -508,6 +738,18 @@ int main()
 
     // Preemptives SJF 실행
     SRTF_IO_Ptr();
+    Print_Gantt_Chart();
+    Print_Results();
+
+    // 다시 초기화(복원)
+    memcpy(plist, backup, sizeof(plist));
+    ready_count = waiting_count = gantt_index = 0;
+    memset(ready_queue, 0, sizeof(ready_queue));
+    memset(waiting_queue, 0, sizeof(waiting_queue));
+    memset(gantt_chart, 0, sizeof(gantt_chart));
+
+    // Round Robin 실행
+    RoundRobin_IO();
     Print_Gantt_Chart();
     Print_Results();
 
