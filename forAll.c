@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define MAX_PROCESSES 5
 #define MAX_IO_EVENTS 3
@@ -29,6 +30,8 @@ typedef struct
     int is_waiting;
 } Process;
 
+Process backup[MAX_PROCESSES];
+
 // 구조체 배열을 만들고, 매핑시켜주기
 Process plist[MAX_PROCESSES];
 Process *ready_queue[MAX_PROCESSES * 2];
@@ -41,8 +44,7 @@ int gantt_chart[MAX_TIME], gantt_index = 0;
 void Create_Process()
 {
     printf("\n[Processes Info]\n");
-    srand(42);
-    // 개발 다하고 srand(time(NULL)) 넣어서 더 완벽히 랜덤으로 구현
+    srand(time(NULL));
 
     for (int i = 0; i < process_count; i++)
     {
@@ -63,14 +65,17 @@ void Create_Process()
         p->is_waiting = 0;
 
         // 프로세스 별로 io 횟수는 1번 ~ 3번 사이(무조건 발생한다는 의미)
+        // +1을 안해주면 발생하지 않을 수도 있음, 그러나 일단 모든 프로세스 별로 io가 무조건 발생하는 식으로 구현함
         p->io_event_count = 1 + rand() % MAX_IO_EVENTS;
         for (int j = 0; j < p->io_event_count; j++)
         {
             /*
             burst time 12, io event count 2인 경우를 생각해보면 됨
-            j + 1은 burst time에 걸쳐서 고르게 io를 발생시키기 위한 장치, *1, *2가 됨으로써-, io request time이 4가되고 8이된다.
+            j + 1은 burst time에 걸쳐서 고르게 io를 발생시키기 위한 장치, *1, *2가 됨으로써-, io request time이 4가되고 8이된다.(띄엄띄엄하게 해주는 장치)
             p->io_event_count + 1는 총 몇개의 구간에 걸쳐서 burst time이 실행되는지를 의미
-            위 예시에서는, 3개의 구간에 걸쳐서 실행되므로, burst time은 3개의 구간으로 균등하게 나누면 4씩이다.
+            예를 들면 io 요청이 2번이라면, 그 프로세스의 전체 cpu burst time은 3구간에 나뉘어서 실행된다.(선점당하는 경우 제외, 일반적으로)
+            위 예시에서는, 3개의 구간에 걸쳐서 실행되므로, burst time을 3개의 구간으로 균등하게 나누면 4씩이다.
+            4를 얻고, 1,2를 곱해주어 띄엄띄엄 io 발생 시간을 띄워줌
             */
             p->io_request_times[j] = (j + 1) * (p->burst_time / (p->io_event_count + 1));
             p->io_burst_times[j] = 1 + rand() % 4;
@@ -108,6 +113,7 @@ void Add_To_Waiting(Process *p)
 
     waiting_queue[waiting_count++] = p;
 }
+
 // 웨이팅큐 처리, 웨이팅 큐에 있는 프로세스들 다 한시점씩 io처리해줌
 void Process_Waiting_Queue()
 {
@@ -242,10 +248,10 @@ cpu burst time, io burst time 모두 일치하는 것 확인
 그 프로세스의 변수를 수정하여 다음 ready_queue 선택에서 배제되도록 했음
 하지만 이건 실제로 ready_queue에서 프로세스가 제거되도록 하여 우선순위가 같을 시, FCFS 방식으로 동작함
 */
-void Priority_Nonpreemptive_IO()
+void Nonpreemptive_Priority()
 {
 
-    printf("\nPriority_Nonpreemptive_IO\n");
+    printf("\nNonpreemptive_Priority\n");
 
     int current_time = 0, completed = 0;
     Process *running = NULL;
@@ -347,9 +353,9 @@ void Priority_Nonpreemptive_IO()
     }
 }
 
-void Preemptive_Priority_IO()
+void Preemptive_Priority()
 {
-    printf("\nPreemptive_Priority_IO\n");
+    printf("\nPreemptive_Priority\n");
     int current_time = 0, completed = 0;
     Process *running = NULL;
 
@@ -442,12 +448,130 @@ void Preemptive_Priority_IO()
     }
 }
 
-void SRTF_IO_Ptr()
+// Nonpreemptive SJF
+/*
+cpu burst time이 짧아도, 도착 시간 & nonpreemptive이므로 먼저 도착한 프로세스가 실행되고, 중간에 cpu를 뺏기지 않음
+cpu를 뺏기는 경우는, io 요청에 의해 스스로 나가는 경우 뿐
+
+Premmptive SJF와의 차이점은, 레디큐에서 가장 짧은 프로세스를 찾는 작업을,
+실행 중인 프로세스가 없을 때에만 하느냐 vs 매 시점 하느냐
+*/
+void Nonpreemptive_SJF()
+{
+
+    printf("\nNonpreemptive_SJF\n");
+    int current_time = 0;
+    int completed = 0;
+    int running_pid = -1;
+    Process *running = NULL;
+
+    while (completed < process_count)
+    {
+
+        // 프로세스 도착 -> Ready queue로
+        for (int i = 0; i < process_count; i++)
+        {
+
+            if (plist[i].arrival_time == current_time)
+            {
+                Add_To_Ready(&plist[i]);
+            }
+        }
+
+        // 현재 실행중인 프로세스가 없다면, cpu가 비었을 때
+        if (!running)
+        {
+
+            int shortest_index = -1;
+            int shortest_time = 1e9;
+
+            // Ready queue에서, 남은 시간이 가장 짧은 프로세스를 고르는 작업
+            for (int i = 0; i < ready_count; i++)
+            {
+                int pid = ready_queue[i]->pid;
+                if (plist[pid - 1].remaining_time < shortest_time)
+                {
+
+                    shortest_time = plist[pid - 1].remaining_time;
+                    shortest_index = i;
+                }
+            }
+
+            // 그렇게 선택한 프로세스를 실행준비(실행하는 건 아님)
+            if (shortest_index != -1)
+            {
+
+                running = ready_queue[shortest_index];
+
+                // Ready_queue를 하나씩 앞으로 밀어주는 것
+                for (int j = shortest_index; j < ready_count - 1; j++)
+                {
+                    ready_queue[j] = ready_queue[j + 1];
+                }
+                ready_count--;
+            }
+        }
+
+        // 현재 실행 중인 프로세스가 있다면, 진짜 실행 진행
+        if (running)
+        {
+
+            if (running->start_time == -1)
+                running->start_time = current_time;
+
+            // 실행 중 io 요청 시점이면 Waiting queue로
+            if (running->current_io_index < running->io_event_count && running->remaining_time == running->burst_time - running->io_request_times[running->current_io_index])
+            {
+
+                // cpu remaining이랑 헷갈리지x
+                running->io_remaining = running->io_burst_times[running->current_io_index];
+                running->is_waiting = 1;
+                Add_To_Waiting(running);
+                running->current_io_index++;
+
+                // 추가
+                /* 그래서 다른 알고리즘도 그렇지만, io 요청이 와서 그걸 처리하러 가는 상황에서는
+                간트차트 넣어주면 안된다. 시점에 반영해주면 안된다.
+                */
+                running = NULL;
+                continue;
+            }
+            // io요청 시점이 아니면, 계속 cpu 사용하기
+            else
+            {
+
+                running->remaining_time--;
+
+                if (running->remaining_time == 0)
+                {
+
+                    Process_Waiting_Queue();
+                    running->end_time = current_time + 1;
+                    running->turnaround_time = running->end_time - running->arrival_time;
+                    running->waiting_time = running->turnaround_time - running->burst_time;
+                    running->is_completed = 1;
+
+                    gantt_chart[gantt_index++] = running->pid;
+                    running = NULL;
+                    completed++;
+                    current_time++;
+                    continue;
+                }
+            }
+        }
+        gantt_chart[gantt_index++] = (running ? running->pid : 0);
+        Process_Waiting_Queue();
+        current_time++;
+    }
+}
+
+// Preemptive SJF
+void Preemptive_SJF()
 {
     int current_time = 0, completed = 0;
     Process *running = NULL;
 
-    printf("\nPreemptiveSjf_IO\n");
+    printf("\nPreemptive_SJF\n");
 
     while (completed < process_count)
     {
@@ -500,6 +624,7 @@ void SRTF_IO_Ptr()
                 1시점씩 뒤로 밀리게 됨
                 io발생 떄도 간트차트를 건너뛰어야함
                 */
+                running = NULL;
                 continue;
             }
             // io 요청이 없으면 곧장 실행
@@ -692,63 +817,63 @@ void Print_Results()
     printf("Average TAT = %.2f\n", total_tt / process_count);
 }
 
+void backup_memoery()
+{
+    memcpy(plist, backup, sizeof(plist));
+    ready_count = waiting_count = gantt_index = 0;
+    memset(ready_queue, 0, sizeof(ready_queue));
+    memset(waiting_queue, 0, sizeof(waiting_queue));
+    memset(gantt_chart, 0, sizeof(gantt_chart));
+}
+
 int main()
 {
-    Process backup[MAX_PROCESSES];
 
     // 프로세스 생성
     Create_Process();
     memcpy(backup, plist, sizeof(plist)); // plist 백업
 
-    // FCFS 실행
+    // 1) FCFS 실행
     FCFS();
     Print_Gantt_Chart();
     Print_Results();
 
     // 다시 초기화(복원)
-    memcpy(plist, backup, sizeof(plist));
-    ready_count = waiting_count = gantt_index = 0;
-    memset(ready_queue, 0, sizeof(ready_queue));
-    memset(waiting_queue, 0, sizeof(waiting_queue));
-    memset(gantt_chart, 0, sizeof(gantt_chart));
+    backup_memoery();
 
-    // Preemptive Priority 실행
-    Preemptive_Priority_IO();
+    // 2) Nonpreemptive SJF 실행
+    Nonpreemptive_SJF();
     Print_Gantt_Chart();
     Print_Results();
 
     // 다시 초기화(복원)
-    memcpy(plist, backup, sizeof(plist));
-    ready_count = waiting_count = gantt_index = 0;
-    memset(ready_queue, 0, sizeof(ready_queue));
-    memset(waiting_queue, 0, sizeof(waiting_queue));
-    memset(gantt_chart, 0, sizeof(gantt_chart));
+    backup_memoery();
 
-    // Non-Preemptive Priority 실행
-    Priority_Nonpreemptive_IO();
+    // 3) Preemptives SJF 실행
+    Preemptive_SJF();
     Print_Gantt_Chart();
     Print_Results();
 
     // 다시 초기화(복원)
-    memcpy(plist, backup, sizeof(plist));
-    ready_count = waiting_count = gantt_index = 0;
-    memset(ready_queue, 0, sizeof(ready_queue));
-    memset(waiting_queue, 0, sizeof(waiting_queue));
-    memset(gantt_chart, 0, sizeof(gantt_chart));
+    backup_memoery();
 
-    // Preemptives SJF 실행
-    SRTF_IO_Ptr();
+    // 4) Nonpreemptive Priority 실행
+    Nonpreemptive_Priority();
     Print_Gantt_Chart();
     Print_Results();
 
     // 다시 초기화(복원)
-    memcpy(plist, backup, sizeof(plist));
-    ready_count = waiting_count = gantt_index = 0;
-    memset(ready_queue, 0, sizeof(ready_queue));
-    memset(waiting_queue, 0, sizeof(waiting_queue));
-    memset(gantt_chart, 0, sizeof(gantt_chart));
+    backup_memoery();
 
-    // Round Robin 실행
+    // 5) Preemptive Priority 실행
+    Preemptive_Priority();
+    Print_Gantt_Chart();
+    Print_Results();
+
+    // 다시 초기화(복원)
+    backup_memoery();
+
+    // 6) Round Robin 실행
     RoundRobin_IO();
     Print_Gantt_Chart();
     Print_Results();

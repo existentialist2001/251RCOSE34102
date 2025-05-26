@@ -178,7 +178,6 @@ void SRTF_IO_Ptr()
                 running->remaining_time == running->burst_time - running->io_request_times[running->current_io_index])
             {
                 running->io_remaining = running->io_burst_times[running->current_io_index];
-
                 running->is_waiting = 1;
                 Add_To_Waiting(running);
                 /*여기서, ready queue에서 제거하지 않아도 됨, 왜냐하면 is_waiting = 1이기 때문에, ready_queue에 남아있더라도 가장 짧은 프로세스를 찾을 때
@@ -207,7 +206,6 @@ void SRTF_IO_Ptr()
                     running->is_completed = 1;
 
                     gantt_chart[gantt_index++] = running->pid;
-
                     running = NULL;
                     completed++;
                     current_time++;
