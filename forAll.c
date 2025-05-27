@@ -240,13 +240,13 @@ void FCFS()
 
 /*
 io요청 때문에 스스로 나가는 경우를 제외하고는, cpu가 선점되는 경우 없음
-cpu burst time, io burst time 모두 일치하는 것 확인
-다만,
-차이점이 있음
+nonpreemptive_priority - 실제로 레디 큐에서 삭제, priority가 같다면 먼저 레디 큐에 들어온 프로세스가 실행, 즉
+priority가 같은 경우 FCFS방식으로 결정됨
 
-이 알고리즘은 거의 마지막에 구현한거라, 기존 알고리즘들은 프로세스가 io요청을 받았을 때, ready_queue에서 실질적으로 프로세스를 빼지 않고,
-그 프로세스의 변수를 수정하여 다음 ready_queue 선택에서 배제되도록 했음
-하지만 이건 실제로 ready_queue에서 프로세스가 제거되도록 하여 우선순위가 같을 시, FCFS 방식으로 동작함
+nprt와 pprt의 차이점은, priority 검사를
+전자는 'running 중인 프로세스가 없을 때', 후자는 '매 시점', 즉 반복분의 첫 부분에서 '항상'
+특히 후자는 레디 큐에서 실제로 프로세스를 삭제해주지 않기 때문에, io처리 중인 프로세스는 레디 큐에서 프로세스를 선택하는 검사에서 걸러내기 위해
+ready_queue[i]->is_waiting 변수를 추가로 사용, is_waiting = 1이라는 것은 웨이팅 큐에서 io처리를 기다리거나, 하고 있다는 의미
 */
 void Nonpreemptive_Priority()
 {
@@ -370,6 +370,7 @@ void Preemptive_Priority()
         for (int i = 0; i < ready_count; i++)
         {
 
+            // is_waiting 변수가 nonpreemptive와의 차이
             if (!ready_queue[i]->is_completed && !ready_queue[i]->is_waiting && ready_queue[i]->remaining_time > 0)
             {
                 if (ready_queue[i]->priority > max_priority)
@@ -381,14 +382,6 @@ void Preemptive_Priority()
         }
 
         running = (sel_idx != -1) ? ready_queue[sel_idx] : NULL;
-
-        // reday_queue에서 해당 프로세스를 삭제해주는 작업
-        // if (sel_idx != -1)
-        // {
-        //     for (int j = sel_idx; j < ready_count - 1; j++)
-        //         ready_queue[j] = ready_queue[j + 1];
-        //     ready_count--;
-        // }
 
         // 실행
         if (running)
@@ -450,11 +443,14 @@ void Preemptive_Priority()
 
 // Nonpreemptive SJF
 /*
-cpu burst time이 짧아도, 도착 시간 & nonpreemptive이므로 먼저 도착한 프로세스가 실행되고, 중간에 cpu를 뺏기지 않음
+cpu burst time이 짧아도, 도착 시간 우선, nonpreemptive이므로 먼저 도착한 프로세스가 실행되고, 중간에 cpu를 뺏기지 않음
 cpu를 뺏기는 경우는, io 요청에 의해 스스로 나가는 경우 뿐
 
+nprt vs pprt와의 구조와 같음
 Premmptive SJF와의 차이점은, 레디큐에서 가장 짧은 프로세스를 찾는 작업을,
 실행 중인 프로세스가 없을 때에만 하느냐 vs 매 시점 하느냐
++
+레디큐에서 실제로 삭제 vs 레디큐에서 실제로 삭제하지 않음, 다만 is_waiting 변수 사용
 */
 void Nonpreemptive_SJF()
 {
